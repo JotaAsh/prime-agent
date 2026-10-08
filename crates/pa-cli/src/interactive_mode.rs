@@ -34,7 +34,7 @@ mod tests;
 
 /// Run the interactive TUI attached to the daemon. Returns the exit code.
 pub fn run_interactive_mode(options: &RunOptions) -> Result<i32> {
-    let socket_path = resolve_socket_path(options.daemon_socket.as_deref());
+    let socket_path = resolve_socket_path(options.daemon_socket.as_deref(), options.standalone);
     let configuration_load_started = std::time::Instant::now();
     let (tui_options, pending_onboarding_stages) = build_tui_options(
         options,
@@ -94,7 +94,21 @@ pub fn run_interactive_mode(options: &RunOptions) -> Result<i32> {
             .track(client);
         }
         let attach_started = std::time::Instant::now();
-        ensure_daemon_running(&tui_options.socket_path, &tui_options.cwd).await?;
+        if options.standalone {
+            let supervisor_options = pa_daemon::supervisor::SupervisorOptions {
+                socket_path: tui_options.socket_path.clone(),
+                agent_dir: options.config.agent_dir.clone(),
+            };
+            tokio::spawn(async move {
+                if let Err(e) = pa_daemon::supervisor::run_supervisor(supervisor_options).await {
+                    eprintln!("Standalone supervisor exited with error: {}", e);
+                }
+            });
+            // Small delay to allow the embedded supervisor's listener to bind
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        } else {
+            ensure_daemon_running(&tui_options.socket_path, &tui_options.cwd).await?;
+        }
         if let Some(client) = startup_telemetry.as_ref() {
             pa_telemetry::AgentStartupStage {
                 stage: "session_attach",
@@ -391,7 +405,10 @@ async fn run_agents_view_flow(
 /// `--daemon-socket` value, the `PRIME_AGENT_DAEMON_SOCKET` environment,
 /// or the per-user default socket path (precedence in that order).
 #[must_use]
-pub fn resolve_socket_path(daemon_socket: Option<&str>) -> PathBuf {
+pub fn resolve_socket_path(daemon_socket: Option<&str>, standalone: bool) -> PathBuf {
+    if standalone {
+        return PathBuf::from("mem://daemon.sock");
+    }
     config::resolve_daemon_socket_path(daemon_socket)
 }
 

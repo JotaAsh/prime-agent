@@ -935,15 +935,15 @@ fn is_goal_context_item(item: &QueuedItem) -> bool {
 /// read, or the serve loop fails.
 pub async fn run_worker() -> Result<()> {
     if std::env::var(WORKER_ROLE_ENV).unwrap_or_default() != "1" {
-        return Err(anyhow!("worker mode requires {WORKER_ROLE_ENV}=1"));
+        return Err(anyhow::anyhow!("worker mode requires {WORKER_ROLE_ENV}=1"));
     }
     let config = WorkerConfig::from_env()?;
-    // Self-registration: the supervisor's roster survives its own restarts
-    // because workers re-present their identity (liveness watch + backoff).
+    run_worker_with_config(config).await
+}
+
+pub async fn run_worker_with_config(config: WorkerConfig) -> Result<()> {
     let registration = crate::registration::start(&config);
     let worker = Arc::new(Worker::new(config, registration));
-    // The refused-registration self-heal: retire instead of remaining an
-    // invisible lease-holder.
     if let Some(handle) = worker.registration.clone() {
         let worker = Arc::clone(&worker);
         tokio::spawn(async move {

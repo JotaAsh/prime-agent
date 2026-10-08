@@ -1042,7 +1042,7 @@ fn session_open_guard(
     socket_path: Option<&str>,
     session_path: &std::path::Path,
 ) -> Result<pa_daemon::lease::SessionLease, String> {
-    let socket = crate::interactive_mode::resolve_socket_path(socket_path);
+    let socket = crate::interactive_mode::resolve_socket_path(socket_path, false);
     if let Ok(mut client) = crate::daemon_client::DaemonClient::connect(&socket) {
         let list = client
             .request(pa_types::daemon::DaemonCommand::List {

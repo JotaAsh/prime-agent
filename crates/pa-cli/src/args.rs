@@ -175,6 +175,7 @@ pub struct Args {
     pub list_models: Option<Option<String>>,
     pub offline: bool,
     pub verbose: bool,
+    pub standalone: bool,
     pub messages: Vec<String>,
     #[allow(clippy::struct_field_names)]
     // the trailing _args matches the TS `fileArgs` wire surface
@@ -441,6 +442,7 @@ pub fn parse_args(args: &[String]) -> Args {
             }
             "--verbose" => result.verbose = true,
             "--offline" => result.offline = true,
+            "--standalone" => result.standalone = true,
             _ if arg.starts_with("--resume=") => {
                 let value = &arg["--resume=".len()..];
                 if value.is_empty() {

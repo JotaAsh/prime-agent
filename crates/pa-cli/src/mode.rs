@@ -123,6 +123,7 @@ pub struct RunOptions {
     /// non-interactive prompt path sends them (the interactive arm is unwired).
     pub initial_images: Vec<pa_agent::types::ImageContent>,
     pub verbose: bool,
+    pub standalone: bool,
     pub offline: bool,
     pub agents_view_requested: bool,
     pub attach_agent: Option<String>,

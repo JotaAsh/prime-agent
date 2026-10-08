@@ -406,8 +406,19 @@ impl Supervisor {
     ) -> Result<Child> {
         // One env definition for spawn and for the update roster's `launch_env` row
         // (spec §8: "env snapshot to respawn the worker identically").
-        let (worker_socket, cwd, launch_env) = {
+        let (worker_socket, cwd, launch_env, worker_config) = {
             let descriptor = resident.descriptor.lock().await;
+            let config = crate::worker::WorkerConfig {
+                socket_path: PathBuf::from(&descriptor.socket_path),
+                supervisor_socket_path: PathBuf::from(&self.options.socket_path),
+                token: descriptor.authentication_token.clone(),
+                worker_instance_id: resident.worker_id.clone(),
+                active_session_id: descriptor.root_active_session_id.clone(),
+                agent_dir: self.options.agent_dir.clone(),
+                recovery_journal_path: PathBuf::from(&descriptor.recovery_journal_path),
+                script: descriptor.create_command.rest.get("script").cloned(),
+                telemetry_disabled: Some(true),
+            };
             (
                 PathBuf::from(&descriptor.socket_path),
                 descriptor
@@ -423,12 +434,42 @@ impl Supervisor {
                     &uuid::Uuid::new_v4().to_string(),
                     &descriptor,
                 ),
+                config,
             )
         };
 
         let executable = std::env::current_exe().context("resolve pa-daemon executable")?;
         let stderr_log_path =
             crate::worker_stderr::log_path(&self.options.agent_dir, &resident.worker_id);
+
+        let socket_str = self.options.socket_path.to_string_lossy();
+        if socket_str.starts_with("mem://") {
+            tokio::spawn(async move {
+                if let Err(e) = crate::worker::run_worker_with_config(worker_config).await {
+                    eprintln!("Standalone worker exited: {}", e);
+                }
+            });
+            #[cfg(windows)]
+            let mut command = {
+                let mut cmd = tokio::process::Command::new("powershell");
+                cmd.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 315360000"]);
+                cmd
+            };
+            #[cfg(not(windows))]
+            let mut command = {
+                let mut cmd = tokio::process::Command::new("sleep");
+                cmd.arg("315360000");
+                cmd
+            };
+            command.stdin(std::process::Stdio::null());
+            command.stdout(std::process::Stdio::null());
+            command.stderr(std::process::Stdio::null());
+            let child = command
+                .spawn()
+                .with_context(|| format!("spawn dummy session worker {}", resident.worker_id))?;
+            return Ok(child);
+        }
+
         let stderr_log = crate::worker_stderr::open_for_spawn(&stderr_log_path)?;
         let mut command = Command::new(&executable);
         command

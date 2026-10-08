@@ -143,7 +143,18 @@ impl UnixSocketAddress {
 /// Returns an error if `path` cannot become a kernel-valid socket address or the listener fails to
 /// bind.
 #[cfg(unix)]
+#[allow(clippy::missing_panics_doc)]
 pub async fn bind_transport(path: &Path) -> Result<Box<dyn TransportListener>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        let (tx, rx) = mpsc::channel(16);
+        mem_registry()
+            .lock()
+            .unwrap()
+            .insert(path.to_string_lossy().to_string(), tx);
+        return Ok(Box::new(MemoryListener {
+            receiver: tokio::sync::Mutex::new(rx),
+        }));
+    }
     let address = UnixSocketAddress::new(path)?;
     let listener = tokio::net::UnixListener::bind(address.effective())?;
     Ok(Box::new(listener))
@@ -155,7 +166,25 @@ pub async fn bind_transport(path: &Path) -> Result<Box<dyn TransportListener>> {
 ///
 /// Returns an error if `path` cannot become a kernel-valid socket address or the connection fails.
 #[cfg(unix)]
+#[allow(clippy::missing_panics_doc)]
 pub async fn connect_transport(path: &Path) -> Result<Box<dyn TransportStream>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        let tx = {
+            let reg = mem_registry().lock().unwrap();
+            reg.get(&path.to_string_lossy().to_string()).cloned()
+        };
+        let Some(tx) = tx else {
+            return Err(anyhow::anyhow!(
+                "Memory transport not found: {}",
+                path.display()
+            ));
+        };
+        let (client, server) = tokio::io::duplex(1024 * 1024 * 16);
+        tx.send(server)
+            .await
+            .map_err(|_| anyhow::anyhow!("Memory transport listener closed"))?;
+        return Ok(Box::new(MemoryStream { stream: client }));
+    }
     let address = UnixSocketAddress::new(path)?;
     let stream = tokio::net::UnixStream::connect(address.effective()).await?;
     Ok(Box::new(stream))
@@ -288,7 +317,18 @@ fn fnv1a64(bytes: &str) -> u64 {
 ///
 /// Returns an error when `path` is not valid UTF-8 or the named-pipe listener cannot be created.
 #[cfg(windows)]
+#[allow(clippy::missing_panics_doc)]
 pub async fn bind_transport(path: &Path) -> Result<Box<dyn TransportListener>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        let (tx, rx) = mpsc::channel(16);
+        mem_registry()
+            .lock()
+            .unwrap()
+            .insert(path.to_string_lossy().to_string(), tx);
+        return Ok(Box::new(MemoryListener {
+            receiver: tokio::sync::Mutex::new(rx),
+        }));
+    }
     let name = pipe_name(path)?;
     let listener = super::windows_pipe::NamedPipeListener::bind(&name)?;
     Ok(Box::new(listener))
@@ -301,7 +341,25 @@ pub async fn bind_transport(path: &Path) -> Result<Box<dyn TransportListener>> {
 /// Returns an error when `path` is not valid UTF-8 or the connection attempt fails, including the
 /// busy-instance retry window.
 #[cfg(windows)]
+#[allow(clippy::missing_panics_doc)]
 pub async fn connect_transport(path: &Path) -> Result<Box<dyn TransportStream>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        let tx = {
+            let reg = mem_registry().lock().unwrap();
+            reg.get(&path.to_string_lossy().to_string()).cloned()
+        };
+        let Some(tx) = tx else {
+            return Err(anyhow::anyhow!(
+                "Memory transport not found: {}",
+                path.display()
+            ));
+        };
+        let (client, server) = tokio::io::duplex(1024 * 1024 * 16);
+        tx.send(server)
+            .await
+            .map_err(|_| anyhow::anyhow!("Memory transport listener closed"))?;
+        return Ok(Box::new(MemoryStream { stream: client }));
+    }
     let name = pipe_name(path)?;
     let client = super::windows_pipe::connect(&name).await?;
     Ok(Box::new(client))
@@ -344,6 +402,12 @@ impl BlockingTransportStream for std::os::unix::net::UnixStream {
 /// connection fails.
 #[cfg(unix)]
 pub fn connect_blocking(path: &Path) -> std::io::Result<Box<dyn BlockingTransportStream>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Blocking connection not supported for mem://",
+        ));
+    }
     let address = UnixSocketAddress::new(path).map_err(std::io::Error::other)?;
     let stream = std::os::unix::net::UnixStream::connect(address.effective())?;
     Ok(Box::new(stream))
@@ -356,6 +420,12 @@ pub fn connect_blocking(path: &Path) -> std::io::Result<Box<dyn BlockingTranspor
 /// Returns an error when `path` is not valid UTF-8 or the blocking connection fails.
 #[cfg(windows)]
 pub fn connect_blocking(path: &Path) -> std::io::Result<Box<dyn BlockingTransportStream>> {
+    if path.to_string_lossy().starts_with("mem://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Blocking connection not supported for mem://",
+        ));
+    }
     let name = pipe_name(path).map_err(std::io::Error::other)?;
     let client = super::windows_pipe::BlockingPipeClient::connect(&name)?;
     Ok(Box::new(client))
@@ -565,5 +635,80 @@ mod pipe_name_tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let next = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
         (u64::from(std::process::id()) << 32) | next
+    }
+}
+
+// ----------------- IN-MEMORY TRANSPORT -----------------
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use tokio::io::DuplexStream;
+use tokio::sync::mpsc;
+
+static MEM_REGISTRY: OnceLock<Mutex<HashMap<String, mpsc::Sender<DuplexStream>>>> = OnceLock::new();
+
+fn mem_registry() -> &'static Mutex<HashMap<String, mpsc::Sender<DuplexStream>>> {
+    MEM_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub struct MemoryListener {
+    receiver: tokio::sync::Mutex<mpsc::Receiver<DuplexStream>>,
+}
+
+impl TransportListener for MemoryListener {
+    fn accept(&self) -> AcceptFuture<'_> {
+        Box::pin(async move {
+            if let Some(stream) = self.receiver.lock().await.recv().await {
+                Ok(Box::new(MemoryStream { stream }) as Box<dyn TransportStream>)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Memory transport closed",
+                ))
+            }
+        })
+    }
+}
+
+pub struct MemoryStream {
+    stream: DuplexStream,
+}
+
+impl TransportStream for MemoryStream {
+    fn split(self: Box<Self>) -> (Box<dyn AsyncReadHalf>, Box<dyn AsyncWriteHalf>) {
+        let (reader, writer) = tokio::io::split(self.stream);
+        (Box::new(reader), Box::new(writer))
+    }
+}
+
+pub struct BlockingMemoryStream {
+    // Actually we don't support blocking memory streams easily without a background task.
+    // The CLI client uses connect_blocking, but standalone mode doesn't use the CLI client process.
+    // So we can just return an error if someone tries to connect_blocking to a mem:// path.
+}
+
+impl std::io::Read for BlockingMemoryStream {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        unimplemented!("BlockingMemoryStream::read")
+    }
+}
+impl std::io::Write for BlockingMemoryStream {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        unimplemented!("BlockingMemoryStream::write")
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        unimplemented!("BlockingMemoryStream::flush")
+    }
+}
+impl std::fmt::Debug for BlockingMemoryStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BlockingMemoryStream")
+    }
+}
+impl BlockingTransportStream for BlockingMemoryStream {
+    fn try_clone_box(&self) -> std::io::Result<Box<dyn BlockingTransportStream>> {
+        unimplemented!("BlockingMemoryStream::try_clone_box")
+    }
+    fn set_read_timeout(&self, _timeout: std::time::Duration) -> std::io::Result<()> {
+        unimplemented!("BlockingMemoryStream::set_read_timeout")
     }
 }

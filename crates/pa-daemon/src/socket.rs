@@ -70,6 +70,9 @@ async fn acquire_cleanup_lock(path: &Path) -> Result<pa_core::platform::LockDir>
 /// answers, the cleanup lock cannot be acquired, or the cleanup fails.
 #[cfg(unix)]
 pub async fn prepare_socket_path(path: &Path) -> Result<()> {
+    if path.to_string_lossy().starts_with("mem://") {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         crate::paths::ensure_dir(parent)?;
     }
@@ -173,6 +176,9 @@ pub async fn prepare_socket_path(_path: &Path) -> Result<()> {
 /// incarnation (no-op for named pipes). The remove runs best-effort under
 /// the cleanup lock: contention means another daemon owns the socket path.
 pub fn cleanup_socket_path(path: &Path, expected_identity: Option<SocketIdentity>) {
+    if path.to_string_lossy().starts_with("mem://") {
+        return;
+    }
     if !path.exists() {
         return;
     }
@@ -225,6 +231,9 @@ pub fn cleanup_socket_path_after_close(_path: &Path, _expected_identity: Option<
 /// Restrict the bound socket file to its owner (Unix mode 0o600; Windows
 /// named pipes use ACLs on the pipe object instead).
 pub fn restrict_socket_path(path: &Path) {
+    if path.to_string_lossy().starts_with("mem://") {
+        return;
+    }
     let _ = pa_core::platform::perms::restrict_file(path);
 }
 

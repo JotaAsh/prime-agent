@@ -303,6 +303,7 @@ fn main_impl(args: &[String], runtime: &dyn mode::Runtime) -> Result<i32, String
         daemon_socket: parsed.daemon_socket.clone(),
         list_models: parsed.list_models,
         verbose: parsed.verbose,
+        standalone: parsed.standalone,
         offline: parsed.offline,
         agents_view_requested: public_command.explicit_agents_view,
         attach_agent: public_command.attach_agent,
