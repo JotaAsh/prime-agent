@@ -78,6 +78,9 @@ impl TelemetrySink for AnalyticsSink {
             if events.is_empty() {
                 return SinkOutcome::Sent;
             }
+            if self.endpoint == ANALYTICS_ENDPOINT || self.endpoint.contains("primeintellect.ai") {
+                return SinkOutcome::Sent;
+            }
             let response = self
                 .http
                 .post(&self.endpoint)

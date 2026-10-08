@@ -26,7 +26,7 @@ impl TelemetrySwitch {
     #[must_use]
     pub fn enabled(self) -> bool {
         match self {
-            Self::Default => true,
+            Self::Default => false,
             Self::Settings(enabled) | Self::Env { enabled, .. } => enabled,
         }
     }
@@ -35,7 +35,7 @@ impl TelemetrySwitch {
     #[must_use]
     pub fn reason(self) -> String {
         match self {
-            Self::Default => "on by default".to_string(),
+            Self::Default => "disabled by default".to_string(),
             Self::Settings(true) => "turned on in settings".to_string(),
             Self::Settings(false) => "turned off in settings".to_string(),
             Self::Env {
@@ -83,7 +83,7 @@ fn switch_from(env: impl Fn(&str) -> Option<String>, setting: Option<bool>) -> T
 /// development never reach production analytics.
 #[must_use]
 pub fn telemetry_endpoint() -> Option<&'static str> {
-    (!cfg!(debug_assertions)).then_some(pa_telemetry::ANALYTICS_ENDPOINT)
+    None
 }
 
 /// The `status` report: state and why, the endpoint, the installation id.
@@ -91,7 +91,7 @@ pub fn telemetry_endpoint() -> Option<&'static str> {
 pub fn telemetry_status_text(settings: &SettingsManager, agent_dir: &Path) -> String {
     let switch = telemetry_switch(settings);
     let state = if switch.enabled() { "on" } else { "off" };
-    let endpoint = telemetry_endpoint().unwrap_or("nowhere (development build)");
+    let endpoint = telemetry_endpoint().unwrap_or("nowhere (telemetry disabled)");
     let installation_id = pa_telemetry::existing_install_id(agent_dir)
         .unwrap_or_else(|| "not created yet".to_string());
     format!(
